@@ -1,4 +1,3 @@
-# mcp_test_server.py
 from mcp.server.fastmcp import FastMCP
 import random
 import torch
@@ -66,4 +65,3 @@ if __name__ == "__main__":
     print(f"Using device: {device}")
     print("Waiting for requests on stdio")
     mcp.run()
-
