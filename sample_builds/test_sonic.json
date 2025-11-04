@@ -1,0 +1,9 @@
+{
+  "type": "SONiC",
+  "version": "202311.1",
+  "platform": "x86_64-arista_7170_64c",
+  "kernel_version": "5.10.0-8-amd64",
+  "build_date": "2024-01-10",
+  "serial_number": "SN123456789",
+  "hostname": "sonic-leaf-01"
+}
