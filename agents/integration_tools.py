@@ -3,7 +3,6 @@
 This module provides tools for integrating with Telnet-based device CLIs
 and NetBox (source of truth) for topology and inventory management.
 """
-import telnetlib
 import json
 import time
 import os
@@ -12,7 +11,21 @@ from pathlib import Path
 from typing import Dict, Optional, List
 from utils.logger import setup_logger
 
+# Handle telnetlib import - deprecated and removed in Python 3.12+
+try:
+    import telnetlib
+    TELNETLIB_AVAILABLE = True
+except ImportError:
+    # telnetlib removed in Python 3.12+
+    TELNETLIB_AVAILABLE = False
+    telnetlib = None  # Set to None so code doesn't break
+
 logger = setup_logger(__name__)
+
+# Log warning after logger is available
+if not TELNETLIB_AVAILABLE:
+    logger.warning("telnetlib not available (removed in Python 3.12+). Telnet features will be disabled.")
+    logger.warning("To enable Telnet: pip install telnetlib3")
 
 # Try to load environment variables from .env file
 try:
@@ -36,6 +49,9 @@ def get_device_status_from_telnet(
     This tool connects to SONiC, EdgeCore, Celtica DS4000, NVIDIA SN2700,
     or other network devices via Telnet and executes CLI commands.
     
+    Note: telnetlib was removed in Python 3.12+. For Python 3.12+, install
+    telnetlib3: pip install telnetlib3
+    
     Maps to Aviz NCP functionality:
     - Connects to network devices via Telnet for CLI access
     - Executes device commands (show interfaces, show version, show environment)
@@ -57,6 +73,14 @@ def get_device_status_from_telnet(
         - output: Command output (text)
         - error: Error message if execution failed
     """
+    if not TELNETLIB_AVAILABLE:
+        return {
+            "success": False,
+            "host": host,
+            "command": command,
+            "output": "",
+            "error": "Telnet library not available. telnetlib was removed in Python 3.12+. Install telnetlib3: pip install telnetlib3"
+        }
     logger.info(f"Connecting to device via Telnet: {host}, command: {command}")
     
     result = {

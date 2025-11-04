@@ -1,0 +1,46 @@
+devices:
+  - name: sonic-leaf-01
+    ip: 10.20.11.207
+    vendor: EdgeCore
+    os: SONiC
+    role: leaf
+    vlans:
+      - { id: 101, name: "management" }
+      - { id: 103, name: "production" }
+  
+  - name: nexus-agg-02
+    ip: 10.20.11.14
+    vendor: Cisco
+    os: NX-OS
+    role: aggregation
+    vlans:
+      - { id: 120, name: "core" }
+      - { id: 103, name: "production" }
+  
+  - name: sonic-spine-01
+    ip: 10.20.11.50
+    vendor: Arista
+    os: SONiC
+    role: spine
+    vlans:
+      - { id: 101, name: "management" }
+      - { id: 120, name: "core" }
+  
+  - name: edgecore-switch-03
+    ip: 10.20.11.88
+    vendor: EdgeCore
+    os: SONiC
+    role: leaf
+    vlans:
+      - { id: 103, name: "production" }
+      - { id: 104, name: "development" }
+  
+  - name: celtica-ds4000-01
+    ip: 10.20.11.100
+    vendor: Celtica
+    os: Custom
+    role: core
+    vlans:
+      - { id: 120, name: "core" }
+      - { id: 101, name: "management" }
+

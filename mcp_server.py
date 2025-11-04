@@ -14,6 +14,7 @@ from agents.build_agent import validate_build_metadata as _validate_build_metada
 from agents.remediation_agent import remediate_link as _remediate_link
 from agents.integration_tools import get_device_status_from_telnet as _get_device_status_from_telnet, get_topology_from_netbox as _get_topology_from_netbox, get_device_and_interface_report as _get_device_and_interface_report
 from agents.validation_agent import validate_system_health as _validate_system_health
+from agents.inventory_agent import get_device_info as _get_device_info, list_devices_by_vlan as _list_devices_by_vlan, get_vlan_table as _get_vlan_table, load_device_inventory
 
 # Initialize logger
 logger = setup_logger(__name__)
@@ -21,6 +22,14 @@ logger = setup_logger(__name__)
 # Initialize MCP server
 mcp = FastMCP("aviz-ncp-ai-agent")
 logger.info("Initializing Aviz NCP AI Agent MCP Server")
+
+# Load device inventory from YAML at startup
+try:
+    load_device_inventory()
+    logger.info("Device inventory loaded successfully")
+except Exception as e:
+    logger.warning(f"Failed to load device inventory: {e}")
+    logger.warning("Device inventory queries will not be available")
 
 
 # -----------------------------
@@ -352,7 +361,171 @@ def get_device_and_interface_report(
 
 
 # -----------------------------
-# 7. SYSTEM HEALTH VALIDATION TOOLS
+# 7. DEVICE INVENTORY TOOLS (YAML-based)
+# -----------------------------
+
+@mcp.tool()
+def get_device_info(device_name: str = "", query_type: str = "") -> dict:
+    """
+    Get device information from YAML inventory.
+    
+    This tool queries the device inventory loaded from devices.yaml file.
+    It supports querying by device name, role, vendor, OS type, or returning all devices.
+    
+    Maps to Aviz NCP functionality:
+    - Provides device inventory lookup from YAML source of truth
+    - Returns device metadata including IP, VLANs, role, vendor, OS
+    - Supports filtering by various criteria (role, vendor, OS)
+    - In production, this would integrate with NetBox and Telnet for real-time data
+    
+    Args:
+        device_name: Name of the device to query (optional, returns all if not provided)
+        query_type: Type of query - "all", "sonic", "by_role", "by_vendor", "by_os" (optional)
+        
+    Returns:
+        Dictionary containing device information:
+        - device: Single device info if device_name provided
+        - devices: List of devices matching query
+        - count: Number of devices returned
+        - grouped_by_role/vendor/os: Grouped results if query_type specified
+        
+    Example:
+        get_device_info(device_name="sonic-leaf-01") returns:
+        {
+            "device": {
+                "name": "sonic-leaf-01",
+                "ip": "10.20.11.207",
+                "vendor": "EdgeCore",
+                "os": "SONiC",
+                "role": "leaf",
+                "vlans": [{"id": 101, "name": "management"}, ...]
+            },
+            "devices": [...],
+            "count": 1
+        }
+    """
+    try:
+        return _get_device_info(device_name=device_name if device_name else None, query_type=query_type if query_type else None)
+    except Exception as e:
+        logger.error(f"Error getting device info: {e}", exc_info=True)
+        return {
+            "error": "Failed to get device information",
+            "message": str(e),
+            "success": False,
+            "devices": []
+        }
+
+
+@mcp.tool()
+def list_devices_by_vlan(vlan_id: int) -> dict:
+    """
+    Find all devices connected to a given VLAN ID.
+    
+    This tool searches the device inventory for all devices that have a specific
+    VLAN configured and returns their information along with VLAN details.
+    
+    Maps to Aviz NCP functionality:
+    - Provides VLAN-to-device mapping from inventory
+    - Returns device list with VLAN information
+    - Supports network topology queries by VLAN
+    - In production, this would cross-reference with NetBox and Telnet data
+    
+    Args:
+        vlan_id: VLAN ID to search for (integer)
+        
+    Returns:
+        Dictionary containing:
+        - vlan_id: The VLAN ID searched
+        - devices: List of devices with that VLAN (each includes name, ip, vendor, os, role, vlan)
+        - count: Number of devices found
+        
+    Example:
+        list_devices_by_vlan(vlan_id=103) returns:
+        {
+            "vlan_id": 103,
+            "devices": [
+                {
+                    "name": "sonic-leaf-01",
+                    "ip": "10.20.11.207",
+                    "vendor": "EdgeCore",
+                    "os": "SONiC",
+                    "role": "leaf",
+                    "vlan": {"id": 103, "name": "production"}
+                },
+                ...
+            ],
+            "count": 2
+        }
+    """
+    try:
+        return _list_devices_by_vlan(vlan_id)
+    except Exception as e:
+        logger.error(f"Error listing devices by VLAN: {e}", exc_info=True)
+        return {
+            "error": "Failed to list devices by VLAN",
+            "message": str(e),
+            "vlan_id": vlan_id,
+            "devices": [],
+            "count": 0
+        }
+
+
+@mcp.tool()
+def get_vlan_table() -> dict:
+    """
+    Generate a VLAN table showing all VLANs and the devices on each VLAN.
+    
+    This tool creates a comprehensive VLAN-to-device mapping table from the
+    device inventory, showing which devices are configured on each VLAN.
+    
+    Maps to Aviz NCP functionality:
+    - Provides complete VLAN topology from inventory
+    - Shows device distribution across VLANs
+    - Supports network planning and troubleshooting
+    - In production, this would integrate with NetBox topology data
+    
+    Returns:
+        Dictionary containing:
+        - vlan_table: List of VLAN entries, each with:
+          - vlan_id: VLAN ID
+          - vlan_name: VLAN name
+          - devices: List of devices on this VLAN
+        - total_vlans: Total number of unique VLANs
+        - total_devices: Total number of devices in inventory
+        
+    Example:
+        get_vlan_table() returns:
+        {
+            "vlan_table": [
+                {
+                    "vlan_id": 101,
+                    "vlan_name": "management",
+                    "devices": [
+                        {"name": "sonic-leaf-01", "ip": "10.20.11.207", "role": "leaf"},
+                        ...
+                    ]
+                },
+                ...
+            ],
+            "total_vlans": 5,
+            "total_devices": 5
+        }
+    """
+    try:
+        return _get_vlan_table()
+    except Exception as e:
+        logger.error(f"Error getting VLAN table: {e}", exc_info=True)
+        return {
+            "error": "Failed to get VLAN table",
+            "message": str(e),
+            "vlan_table": [],
+            "total_vlans": 0,
+            "total_devices": 0
+        }
+
+
+# -----------------------------
+# 8. SYSTEM HEALTH VALIDATION TOOLS
 # -----------------------------
 
 @mcp.tool()
@@ -420,7 +593,10 @@ if __name__ == "__main__":
     logger.info("  6. get_device_status_from_telnet - Execute commands via Telnet")
     logger.info("  7. get_topology_from_netbox - Fetch topology from NetBox")
     logger.info("  8. get_device_and_interface_report - Combined NetBox + Telnet report")
-    logger.info("  9. validate_system_health - System-wide health validation (AI ONE Center)")
+    logger.info("  9. get_device_info - Query device inventory from YAML")
+    logger.info("  10. list_devices_by_vlan - Find devices by VLAN ID")
+    logger.info("  11. get_vlan_table - Generate VLAN-to-device mapping table")
+    logger.info("  12. validate_system_health - System-wide health validation (AI ONE Center)")
     logger.info("Waiting for requests on stdio...")
     
     try:

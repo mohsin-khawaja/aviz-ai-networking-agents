@@ -59,7 +59,13 @@ python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
 # Install dependencies
-pip install "mcp[cli]" torch python-dotenv
+pip install "mcp[cli]" torch python-dotenv pyyaml
+
+# Optional: For interactive CLI agent with LLM support
+pip install openai tabulate
+
+# Optional: For Telnet support in Python 3.12+ (telnetlib was removed)
+pip install telnetlib3
 ```
 
 **Optional: Configure Environment Variables**
@@ -664,6 +670,25 @@ python mcp_server.py
 ```
 
 The server will initialize all agents, load the AI model, and wait for requests on stdio. Logs are written to stderr.
+
+### Interactive CLI Agent
+
+```bash
+python main_agent.py
+```
+
+This launches an interactive conversational interface where you can ask natural language questions:
+- "Show me the network topology"
+- "List all devices from NetBox"
+- "Get device and interface report"
+- "What is the port telemetry?"
+- "Validate system health"
+- "Which VLAN is this device on?"
+- "List all interfaces for sonic-leaf-01"
+
+The agent uses an LLM (OpenAI) or pattern matching to parse your queries and map them to appropriate MCP tools, then formats the responses in clear tables and summaries.
+
+**Note:** For LLM support, set `OPENAI_API_KEY` environment variable. Without it, the agent falls back to pattern-based query parsing.
 
 ### Test with Client
 
