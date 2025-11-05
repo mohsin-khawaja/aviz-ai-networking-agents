@@ -2,7 +2,7 @@
 
 This guide shows you how to run agent queries and test the new `get_inventory_devices` tool.
 
-## 🚀 Quick Test Options
+## Quick Test Options
 
 ### Option 1: Test the New Tool Directly (Fastest)
 
