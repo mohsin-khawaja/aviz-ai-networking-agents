@@ -952,19 +952,57 @@ class CoordinatorResponseRenderer:
                 output.append("")
                 
                 # Render data based on type
-                if query_type == "device_info" and "device" in data:
-                    device = data["device"]
-                    output.append(f"Device: {device.get('name', 'N/A')}")
-                    output.append(f"IP: {device.get('ip', 'N/A')}")
-                    output.append(f"Vendor: {device.get('vendor', 'N/A')}")
-                    output.append(f"OS: {device.get('os', 'N/A')}")
-                    output.append(f"Role: {device.get('role', 'N/A')}")
-                    vlans = device.get("vlans", [])
-                    if vlans:
-                        output.append("VLANs:")
-                        for vlan in vlans:
-                            if isinstance(vlan, dict):
-                                output.append(f"  - VLAN {vlan.get('id', 'N/A')}: {vlan.get('name', 'N/A')}")
+                if query_type == "device_info":
+                    # Check if it's a single device or multiple devices
+                    if "device" in data:
+                        # Single device - show as table for consistency
+                        device = data["device"]
+                        device_table = [[
+                            device.get('name', 'N/A'),
+                            device.get('ip', 'N/A'),
+                            device.get('vendor', 'N/A'),
+                            device.get('os', 'N/A'),
+                            device.get('role', 'N/A'),
+                            ", ".join([f"VLAN {v.get('id', v) if isinstance(v, dict) else v}" for v in device.get('vlans', [])])
+                        ]]
+                        output.append(CoordinatorResponseRenderer._format_table(
+                            device_table,
+                            ["Device", "IP", "Vendor", "OS", "Role", "VLANs"]
+                        ))
+                    elif "devices" in data:
+                        # Multiple devices - show as table
+                        devices = data["devices"]
+                        device_table = []
+                        for device in devices:
+                            vlans_str = ", ".join([f"VLAN {v.get('id', v) if isinstance(v, dict) else v}" for v in device.get("vlans", [])])
+                            device_table.append([
+                                device.get("name", "N/A"),
+                                device.get("ip", "N/A"),
+                                device.get("vendor", "N/A"),
+                                device.get("os", "N/A"),
+                                device.get("role", "N/A"),
+                                vlans_str[:50] + ("..." if len(vlans_str) > 50 else "")
+                            ])
+                        output.append(CoordinatorResponseRenderer._format_table(
+                            device_table,
+                            ["Device", "IP", "Vendor", "OS", "Role", "VLANs"]
+                        ))
+                    elif isinstance(data, dict) and "success" in data:
+                        # Fallback to nested device info
+                        if "device" in data:
+                            device = data["device"]
+                            device_table = [[
+                                device.get('name', 'N/A'),
+                                device.get('ip', 'N/A'),
+                                device.get('vendor', 'N/A'),
+                                device.get('os', 'N/A'),
+                                device.get('role', 'N/A'),
+                                ", ".join([f"VLAN {v.get('id', v) if isinstance(v, dict) else v}" for v in device.get('vlans', [])])
+                            ]]
+                            output.append(CoordinatorResponseRenderer._format_table(
+                                device_table,
+                                ["Device", "IP", "Vendor", "OS", "Role", "VLANs"]
+                            ))
                 
                 elif query_type == "vlan_lookup":
                     devices = data.get("devices", [])
@@ -1014,7 +1052,7 @@ class CoordinatorResponseRenderer:
                             ["Device", "Current Version", "Target Version"]
                         ))
                 
-                elif query_type == "open_tickets" or query_type == "high_priority":
+                elif query_type == "open_tickets" or query_type == "high_priority" or query_type == "device_tickets" or query_type == "servicenow_tickets" or query_type == "zendesk_tickets" or query_type == "all_tickets":
                     tickets = data if isinstance(data, list) else []
                     if tickets:
                         ticket_table = []
@@ -1024,16 +1062,83 @@ class CoordinatorResponseRenderer:
                                 ticket.get("title", "N/A")[:40],
                                 ticket.get("device", "N/A"),
                                 ticket.get("priority", "N/A"),
-                                ticket.get("status", "N/A")
+                                ticket.get("status", "N/A"),
+                                ticket.get("source", "N/A")
                             ])
                         output.append(CoordinatorResponseRenderer._format_table(
                             ticket_table,
-                            ["Ticket ID", "Title", "Device", "Priority", "Status"]
+                            ["Ticket ID", "Title", "Device", "Priority", "Status", "Source"]
                         ))
+                    else:
+                        output.append("No tickets found")
                 
-                elif isinstance(data, (dict, list)):
-                    # Generic structured data
-                    output.append(json.dumps(data, indent=2))
+                elif query_type == "interface_status" or query_type == "sample_telemetry" or query_type == "all_telemetry":
+                    # Handle telemetry data
+                    telemetry_list = data if isinstance(data, list) else [data] if isinstance(data, dict) else []
+                    if telemetry_list:
+                        telemetry_table = []
+                        for entry in telemetry_list:
+                            telemetry_table.append([
+                                entry.get("device", "N/A"),
+                                entry.get("interface", "N/A"),
+                                f"{entry.get('rx_bytes', 0):,}",
+                                f"{entry.get('tx_bytes', 0):,}",
+                                entry.get("rx_errors", 0),
+                                entry.get("tx_errors", 0),
+                                f"{entry.get('utilization', 0):.1%}"
+                            ])
+                        output.append(CoordinatorResponseRenderer._format_table(
+                            telemetry_table,
+                            ["Device", "Interface", "RX Bytes", "TX Bytes", "RX Errors", "TX Errors", "Utilization"]
+                        ))
+                    else:
+                        output.append("No telemetry data available")
+                
+                elif query_type == "vlan_table":
+                    # Handle VLAN table
+                    vlan_table_data = data.get("vlan_table", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                    if vlan_table_data:
+                        vlan_table = []
+                        for vlan_entry in vlan_table_data:
+                            device_count = len(vlan_entry.get("devices", []))
+                            device_names = ", ".join([d.get("name", "N/A") for d in vlan_entry.get("devices", [])[:5]])
+                            if device_count > 5:
+                                device_names += f" ... and {device_count - 5} more"
+                            vlan_table.append([
+                                vlan_entry.get("vlan_id", "N/A"),
+                                vlan_entry.get("vlan_name", "N/A"),
+                                device_count,
+                                device_names[:60] + ("..." if len(device_names) > 60 else "")
+                            ])
+                        output.append(CoordinatorResponseRenderer._format_table(
+                            vlan_table,
+                            ["VLAN ID", "VLAN Name", "Device Count", "Devices"]
+                        ))
+                    else:
+                        output.append("No VLAN data available")
+                
+                elif isinstance(data, (dict, list)) and query_type not in ["unknown", "baseline", "config_status"]:
+                    # For unknown query types, try to detect if it's tabular data
+                    if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                        # Try to create a table from list of dicts
+                        keys = list(data[0].keys())
+                        if keys:
+                            table_data = []
+                            for item in data:
+                                row = [str(item.get(k, "N/A"))[:50] for k in keys]
+                                table_data.append(row)
+                            output.append(CoordinatorResponseRenderer._format_table(
+                                table_data,
+                                keys
+                            ))
+                        else:
+                            output.append(json.dumps(data, indent=2))
+                    else:
+                        output.append(json.dumps(data, indent=2))
+                else:
+                    # Fallback for other types
+                    if isinstance(data, dict) and len(data) > 0:
+                        output.append(json.dumps(data, indent=2))
         
         # Structured data overview
         structured_data = result.get("structured_data", {})
@@ -1106,7 +1211,7 @@ def main():
                 print("  - Config: Firmware versions, configuration compliance, drift")
                 print("  - Ticketing: ServiceNow, Zendesk tickets, incidents")
                 continue
-            
+           
             if query.lower() == "clear":
                 conversation_context = []
                 print("Conversation context cleared")
