@@ -134,7 +134,7 @@ print(json.dumps(json.loads(response), indent=2))
 
 ---
 
-## 📋 File Summary
+## File Summary
 
 | File | Purpose | When to Use |
 |------|---------|-------------|
@@ -146,7 +146,7 @@ print(json.dumps(json.loads(response), indent=2))
 
 ---
 
-## 🔧 Setup Checklist
+## Setup Checklist
 
 Before running queries, ensure:
 
