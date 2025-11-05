@@ -8,13 +8,27 @@ vendor-agnostic network observability, validation, and automation capabilities.
 """
 from mcp.server.fastmcp import FastMCP
 from utils.logger import setup_logger
+from datetime import datetime
 from agents.telemetry_agent import get_port_telemetry as _get_port_telemetry, get_network_topology as _get_network_topology
 from agents.ai_agent import predict_link_health as _predict_link_health
 from agents.build_agent import validate_build_metadata as _validate_build_metadata
 from agents.remediation_agent import remediate_link as _remediate_link
 from agents.integration_tools import get_device_status_from_telnet as _get_device_status_from_telnet, get_topology_from_netbox as _get_topology_from_netbox, get_device_and_interface_report as _get_device_and_interface_report
 from agents.validation_agent import validate_system_health as _validate_system_health
-from agents.inventory_agent import get_device_info as _get_device_info, list_devices_by_vlan as _list_devices_by_vlan, get_vlan_table as _get_vlan_table, load_device_inventory
+from agents.inventory_agent import (
+    get_device_info as _get_device_info,
+    list_devices_by_vlan as _list_devices_by_vlan,
+    get_vlan_table as _get_vlan_table,
+    load_device_inventory,
+    load_yaml_inventory,
+    load_netbox_inventory,
+    merge_inventories,
+    group_by,
+    detect_mismatches,
+    optional_identity_verify
+)
+from agents.inventory_models import InventorySnapshot, InventoryReport
+from utils.renderers import to_table, to_json, to_markdown_report, to_html_report
 
 # Initialize logger
 logger = setup_logger(__name__)
@@ -576,6 +590,372 @@ def validate_system_health(
             "error": "System health validation failed",
             "message": str(e),
             "Total": {"Passed": 0, "Failed": 1, "NotRun": 0}
+        }
+
+
+# -----------------------------
+# 8. PRODUCTION INVENTORY INSIGHT TOOLS
+# -----------------------------
+
+@mcp.tool()
+def inventory_list_devices(
+    filter_by: str = "",
+    value: str = "",
+    format: str = "table"
+) -> dict:
+    """
+    List devices from merged inventory (YAML + NetBox) with optional filtering.
+    
+    This tool provides a unified view of devices from both YAML and NetBox sources,
+    with support for filtering and multiple output formats.
+    
+    Args:
+        filter_by: Filter criteria - "vendor", "role", "region", "os", or "vlan_id" (optional)
+        value: Filter value to match (optional)
+        format: Output format - "table", "json", or "markdown" (default: "table")
+        
+    Returns:
+        Dictionary containing:
+        - content: List with text content (table or markdown) or JSON content
+        - format: Format used
+        - device_count: Number of devices returned
+    """
+    try:
+        # Load and merge inventories
+        yaml_snapshot = load_yaml_inventory()
+        netbox_snapshot = load_netbox_inventory()
+        merged_snapshot = merge_inventories(yaml_snapshot, netbox_snapshot)
+        
+        devices = merged_snapshot.devices
+        
+        # Apply filter if specified
+        if filter_by and value:
+            if filter_by == "vlan_id":
+                vlan_id = int(value)
+                devices = [d for d in devices if any(v.id == vlan_id for v in d.vlans)]
+            else:
+                devices = [d for d in devices if str(getattr(d, filter_by, "")).lower() == value.lower()]
+        
+        # Render in requested format
+        if format == "json":
+            # Return JSON in json block for JSON format
+            json_data = [d.to_dict() for d in devices]
+            content = [{"type": "json", "json": json_data}]
+        elif format == "markdown":
+            from utils.renderers import to_markdown_report
+            from agents.inventory_models import InventoryReport
+            report = InventoryReport(passed=len(devices), groups={})
+            markdown = to_markdown_report(merged_snapshot, report, include_mismatches=False)
+            content = [{"type": "text", "text": markdown}]
+        else:  # table
+            table = to_table(devices)
+            content = [{"type": "text", "text": table}]
+        
+        return {
+            "content": content,
+            "format": format,
+            "device_count": len(devices)
+        }
+    except Exception as e:
+        logger.error(f"Error listing devices: {e}", exc_info=True)
+        return {
+            "content": [{"type": "text", "text": f"Error: {str(e)}"}],
+            "format": format,
+            "device_count": 0,
+            "error": str(e)
+        }
+
+
+@mcp.tool()
+def inventory_summary(format: str = "table") -> dict:
+    """
+    Generate inventory summary with counts by vendor, role, region, and OS.
+    
+    This tool provides a high-level overview of the inventory with statistics
+    grouped by various device attributes.
+    
+    Args:
+        format: Output format - "table", "json", or "markdown" (default: "table")
+        
+    Returns:
+        Dictionary containing:
+        - content: List with text content (table or markdown) or JSON content
+        - format: Format used
+        - totals: Summary statistics
+    """
+    try:
+        # Load and merge inventories
+        yaml_snapshot = load_yaml_inventory()
+        netbox_snapshot = load_netbox_inventory()
+        merged_snapshot = merge_inventories(yaml_snapshot, netbox_snapshot)
+        
+        # Generate groupings
+        vendor_groups = group_by(merged_snapshot, "vendor")
+        role_groups = group_by(merged_snapshot, "role")
+        os_groups = group_by(merged_snapshot, "os")
+        region_groups = group_by(merged_snapshot, "region")
+        
+        totals = {
+            "total_devices": len(merged_snapshot.devices),
+            "by_vendor": {k: len(v) for k, v in vendor_groups.items()},
+            "by_role": {k: len(v) for k, v in role_groups.items()},
+            "by_os": {k: len(v) for k, v in os_groups.items()},
+            "by_region": {k: len(v) for k, v in region_groups.items()}
+        }
+        
+        # Render in requested format
+        if format == "json":
+            # Return JSON in json block for JSON format
+            content = [{"type": "json", "json": totals}]
+        elif format == "markdown":
+            markdown_lines = [
+                "# Inventory Summary",
+                "",
+                f"**Total Devices:** {totals['total_devices']}",
+                "",
+                "## By Vendor",
+                ""
+            ]
+            for vendor, count in totals["by_vendor"].items():
+                markdown_lines.append(f"- {vendor}: {count}")
+            markdown_lines.extend(["", "## By Role", ""])
+            for role, count in totals["by_role"].items():
+                markdown_lines.append(f"- {role}: {count}")
+            markdown_lines.extend(["", "## By OS", ""])
+            for os_type, count in totals["by_os"].items():
+                markdown_lines.append(f"- {os_type}: {count}")
+            content = [{"type": "text", "text": "\n".join(markdown_lines)}]
+        else:  # table
+            table_data = []
+            table_data.append(["Total Devices", totals["total_devices"], "", ""])
+            table_data.append(["", "", "", ""])
+            table_data.append(["Vendor", "Count", "Role", "Count"])
+            max_len = max(len(totals["by_vendor"]), len(totals["by_role"]))
+            vendors = list(totals["by_vendor"].items())
+            roles = list(totals["by_role"].items())
+            for i in range(max_len):
+                vendor_info = vendors[i] if i < len(vendors) else ("", "")
+                role_info = roles[i] if i < len(roles) else ("", "")
+                table_data.append([vendor_info[0], vendor_info[1], role_info[0], role_info[1]])
+            
+            try:
+                from tabulate import tabulate
+                table = tabulate(table_data, headers=["Category", "Count", "Category", "Count"], tablefmt="grid")
+            except ImportError:
+                table = "\n".join([" | ".join(str(cell) for cell in row) for row in table_data])
+            content = [{"type": "text", "text": table}]
+        
+        return {
+            "content": content,
+            "format": format,
+            "totals": totals
+        }
+    except Exception as e:
+        logger.error(f"Error generating inventory summary: {e}", exc_info=True)
+        return {
+            "content": [{"type": "text", "text": f"Error: {str(e)}"}],
+            "format": format,
+            "totals": {},
+            "error": str(e)
+        }
+
+
+@mcp.tool()
+def inventory_mismatches(
+    run_identity_check: bool = False,
+    format: str = "table"
+) -> dict:
+    """
+    Detect and report inventory mismatches between YAML and NetBox sources.
+    
+    This tool compares YAML and NetBox inventories to identify discrepancies
+    such as missing devices, role mismatches, vendor mismatches, etc.
+    Optionally performs identity verification via SSH/Telnet.
+    
+    Args:
+        run_identity_check: Whether to run SSH/Telnet identity verification (default: False)
+        format: Output format - "table", "json", or "markdown" (default: "table")
+        
+    Returns:
+        Dictionary containing:
+        - content: List with text content (table or markdown) or JSON content
+        - format: Format used
+        - mismatch_count: Number of mismatches found
+        - mismatches: List of mismatch details
+    """
+    try:
+        # Load inventories
+        yaml_snapshot = load_yaml_inventory()
+        netbox_snapshot = load_netbox_inventory()
+        
+        # Detect mismatches
+        mismatches = detect_mismatches(yaml_snapshot, netbox_snapshot)
+        
+        # Optionally run identity verification
+        if run_identity_check:
+            merged_snapshot = merge_inventories(yaml_snapshot, netbox_snapshot)
+            identity_mismatches = optional_identity_verify(merged_snapshot.devices, enabled=True)
+            mismatches.extend(identity_mismatches)
+        
+        # Render in requested format
+        if format == "json":
+            # Return JSON in json block for JSON format
+            mismatch_dicts = [m.to_dict() for m in mismatches]
+            content = [{"type": "json", "json": mismatch_dicts}]
+        elif format == "markdown":
+            markdown_lines = [
+                "# Inventory Mismatches",
+                "",
+                f"**Total Mismatches:** {len(mismatches)}",
+                "",
+                "| Device | Category | Expected | Observed | Details |",
+                "|--------|----------|----------|----------|---------|"
+            ]
+            for mismatch in mismatches:
+                details = mismatch.details or ""
+                markdown_lines.append(
+                    f"| {mismatch.device_name} | {mismatch.category} | "
+                    f"{mismatch.expected} | {mismatch.observed} | {details} |"
+                )
+            content = [{"type": "text", "text": "\n".join(markdown_lines)}]
+        else:  # table
+            try:
+                from tabulate import tabulate
+                table_data = [[
+                    m.device_name,
+                    m.category,
+                    str(m.expected),
+                    str(m.observed),
+                    (m.details or "")[:50]
+                ] for m in mismatches]
+                table = tabulate(table_data, headers=["Device", "Category", "Expected", "Observed", "Details"], tablefmt="grid")
+            except ImportError:
+                table = "\n".join([" | ".join(row) for row in table_data])
+            content = [{"type": "text", "text": table}]
+        
+        return {
+            "content": content,
+            "format": format,
+            "mismatch_count": len(mismatches),
+            "mismatches": [m.to_dict() for m in mismatches]
+        }
+    except Exception as e:
+        logger.error(f"Error detecting mismatches: {e}", exc_info=True)
+        return {
+            "content": [{"type": "text", "text": f"Error: {str(e)}"}],
+            "format": format,
+            "mismatch_count": 0,
+            "mismatches": [],
+            "error": str(e)
+        }
+
+
+@mcp.tool()
+def inventory_report(
+    export: str = "none"
+) -> dict:
+    """
+    Generate a consolidated inventory report with snapshot stats, groupings, and mismatches.
+    
+    This tool creates a comprehensive report combining inventory data from YAML and NetBox,
+    including validation results, device groupings, and any detected mismatches.
+    Can export the report in Markdown, HTML, or JSON formats.
+    
+    Args:
+        export: Export format - "none", "md", "html", or "json" (default: "none")
+        
+    Returns:
+        Dictionary containing:
+        - summary: Short summary of the report
+        - file_path: Path to exported file if export != "none"
+        - device_count: Total number of devices
+        - mismatch_count: Number of mismatches found
+        - report_data: Full report data structure
+    """
+    try:
+        # Load and merge inventories
+        yaml_snapshot = load_yaml_inventory()
+        netbox_snapshot = load_netbox_inventory()
+        merged_snapshot = merge_inventories(yaml_snapshot, netbox_snapshot)
+        
+        # Detect mismatches
+        mismatches = detect_mismatches(yaml_snapshot, netbox_snapshot)
+        
+        # Generate groupings
+        vendor_groups = group_by(merged_snapshot, "vendor")
+        role_groups = group_by(merged_snapshot, "role")
+        os_groups = group_by(merged_snapshot, "os")
+        region_groups = group_by(merged_snapshot, "region")
+        
+        # Create report
+        report = InventoryReport(
+            passed=len(merged_snapshot.devices) - len(mismatches),
+            failed=len(mismatches),
+            not_run=0,
+            mismatches=mismatches,
+            groups={
+                "vendor": {k: len(v) for k, v in vendor_groups.items()},
+                "role": {k: len(v) for k, v in role_groups.items()},
+                "os": {k: len(v) for k, v in os_groups.items()},
+                "region": {k: len(v) for k, v in region_groups.items()}
+            }
+        )
+        
+        # Generate summary
+        summary = (
+            f"Inventory report: {len(merged_snapshot.devices)} devices, "
+            f"{len(mismatches)} mismatches, "
+            f"{report.passed} passed validation"
+        )
+        
+        # Export if requested
+        file_path = None
+        if export != "none":
+            from pathlib import Path
+            artifacts_dir = Path("artifacts")
+            artifacts_dir.mkdir(exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            if export == "md":
+                markdown = to_markdown_report(merged_snapshot, report)
+                file_path = artifacts_dir / f"inventory_report_{timestamp}.md"
+                with open(file_path, 'w') as f:
+                    f.write(markdown)
+            elif export == "html":
+                markdown = to_markdown_report(merged_snapshot, report)
+                html = to_html_report(markdown, title="Inventory Report")
+                file_path = artifacts_dir / f"inventory_report_{timestamp}.html"
+                with open(file_path, 'w') as f:
+                    f.write(html)
+            elif export == "json":
+                report_data = {
+                    "snapshot": merged_snapshot.to_dict(),
+                    "report": report.to_dict()
+                }
+                file_path = artifacts_dir / f"inventory_report_{timestamp}.json"
+                with open(file_path, 'w') as f:
+                    f.write(to_json(report_data))
+        
+        return {
+            "summary": summary,
+            "file_path": str(file_path) if file_path else None,
+            "device_count": len(merged_snapshot.devices),
+            "mismatch_count": len(mismatches),
+            "report_data": {
+                "snapshot": merged_snapshot.to_dict(),
+                "report": report.to_dict()
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error generating inventory report: {e}", exc_info=True)
+        return {
+            "summary": f"Error generating report: {str(e)}",
+            "file_path": None,
+            "device_count": 0,
+            "mismatch_count": 0,
+            "report_data": {},
+            "error": str(e)
         }
 
 

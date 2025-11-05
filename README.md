@@ -687,6 +687,261 @@ if topology["success"]:
             monitor_device(device["name"])
 ```
 
+## Inventory Insight Agent
+
+The **Inventory Insight Agent** is a production-style inventory management system that provides unified device inventory from multiple sources (YAML and NetBox), validates and correlates data, detects mismatches, and generates actionable reports.
+
+### Features
+
+- **Multi-Source Inventory**: Reads from YAML files and NetBox API, with automatic fallback to sample data
+- **Data Correlation**: Merges YAML and NetBox inventories intelligently, preferring NetBox but preserving YAML VLAN data
+- **Mismatch Detection**: Identifies discrepancies between sources (missing devices, role mismatches, vendor mismatches)
+- **Optional Identity Verification**: Verifies device identity via SSH/Telnet when credentials are available
+- **Multiple Output Formats**: Table, JSON, Markdown, and HTML report formats
+- **Export Functionality**: Generates timestamped reports in `artifacts/` directory
+
+### Dependencies
+
+The Inventory Insight Agent uses the following dependencies (already in `requirements.txt`):
+
+- `pyyaml` - YAML file parsing
+- `requests` - NetBox API communication
+- `tabulate` - Table formatting
+- `jinja2` - HTML template rendering
+- `paramiko` - SSH connectivity (optional)
+- `python-dotenv` - Environment variable management
+
+### Environment Variables
+
+Configure these in your `.env` file (see `.env.example`):
+
+```bash
+# NetBox Configuration (optional, falls back to sample data)
+NETBOX_URL=https://netbox.example.com
+NETBOX_TOKEN=your-netbox-api-token-here
+
+# SSH Credentials (optional, for identity verification)
+SSH_USER=admin
+SSH_PASS=your-ssh-password
+
+# Telnet Credentials (optional, for identity verification)
+TELNET_USER=admin
+TELNET_PASS=your-telnet-password
+```
+
+**Note**: All credentials are optional. The agent works in read-only mode without credentials, and only performs identity verification when SSH/Telnet credentials are provided.
+
+### How to Run
+
+#### Option 1: Two-Terminal Setup (Recommended)
+
+**Terminal A - Start MCP Server:**
+```bash
+python mcp_server.py
+```
+
+**Terminal B - Run Main Agent:**
+```bash
+python main_agent.py
+```
+
+Then you can use either CLI commands or natural language queries:
+
+**CLI Commands:**
+```
+> inventory list --by vendor --value EdgeCore --format table
+> inventory summary --format markdown
+> inventory mismatches --identity-check --format json
+> inventory report --export html
+```
+
+**Natural Language Queries:**
+```
+> Show SONiC leaf switches
+> Group devices by vendor
+> Any mismatches between YAML and NetBox?
+> Generate an inventory report in HTML
+```
+
+#### Option 2: Command-Line Mode
+
+Run commands directly from the command line:
+
+```bash
+# List devices with filtering
+python main_agent.py inventory list --by vendor --value Cisco --format table
+python main_agent.py inventory list --by os --value SONiC --format json
+
+# Get summary
+python main_agent.py inventory summary --format markdown
+
+# Check mismatches
+python main_agent.py inventory mismatches --format table
+
+# Generate reports
+python main_agent.py inventory report --export html
+python main_agent.py inventory report --export md
+python main_agent.py inventory report --export json
+```
+
+### Example Commands and Expected Outputs
+
+#### 1. List Devices (Table Format)
+
+```bash
+python main_agent.py inventory list --by vendor --value EdgeCore --format table
+```
+
+**Expected Output:**
+```
++------------------+-------------+-----------+--------+--------+
+| name             | ip          | vendor    | os     | role   |
++==================+=============+===========+========+========+
+| sonic-leaf-01    | 10.20.11.207| EdgeCore  | SONiC  | leaf   |
+| edgecore-switch-03| 10.20.11.88| EdgeCore  | SONiC  | leaf   |
++------------------+-------------+-----------+--------+--------+
+```
+
+#### 2. Inventory Summary (JSON Format)
+
+```bash
+python main_agent.py inventory summary --format json
+```
+
+**Expected Output:**
+```json
+{
+  "total_devices": 5,
+  "by_vendor": {
+    "EdgeCore": 2,
+    "Cisco": 1,
+    "Arista": 1,
+    "Celtica": 1
+  },
+  "by_role": {
+    "leaf": 2,
+    "aggregation": 1,
+    "spine": 1,
+    "core": 1
+  },
+  "by_os": {
+    "SONiC": 3,
+    "NX-OS": 1,
+    "Custom": 1
+  }
+}
+```
+
+#### 3. Mismatch Detection
+
+```bash
+python main_agent.py inventory mismatches --format table
+```
+
+**Expected Output:**
+```
++------------------+------------------+----------+----------+
+| Device           | Category         | Expected | Observed |
++==================+==================+==========+==========+
+| sonic-leaf-01    | MISSING_IN_NETBOX| sonic... | Not found|
++------------------+------------------+----------+----------+
+```
+
+#### 4. Generate HTML Report
+
+```bash
+python main_agent.py inventory report --export html
+```
+
+**Expected Output:**
+```
+Report exported to: artifacts/inventory_report_20240115_103045.html
+```
+
+The HTML report will be saved in the `artifacts/` directory with:
+- Device inventory summary
+- Groupings by vendor, role, OS, region
+- Mismatch details
+- Responsive, styled layout
+
+### Example Artifact Paths
+
+After running report exports, you'll find files in the `artifacts/` directory:
+
+```
+artifacts/
+├── inventory_report_20240115_103045.html    # HTML report
+├── inventory_report_20240115_103045.md      # Markdown report
+└── inventory_report_20240115_103045.json   # JSON report
+```
+
+**Screenshot Placeholders:**
+- [ ] HTML report screenshot: `docs/screenshots/inventory_report_html.png`
+- [ ] Markdown report preview: `docs/screenshots/inventory_report_md.png`
+- [ ] CLI command output: `docs/screenshots/cli_inventory_list.png`
+
+### MCP Tools
+
+The Inventory Insight Agent exposes these MCP tools (accessible via `mcp_server.py`):
+
+- `inventory_list_devices(filter_by, value, format)` - List devices with optional filtering
+- `inventory_summary(format)` - Get inventory statistics
+- `inventory_mismatches(run_identity_check, format)` - Detect mismatches
+- `inventory_report(export)` - Generate consolidated report
+
+See `mcp_server.py` for detailed tool documentation.
+
+### Data Structure
+
+The `data/devices.yaml` file should contain devices with these fields:
+
+```yaml
+devices:
+  - name: sonic-leaf-01
+    ip: 10.20.11.207
+    vendor: EdgeCore
+    os: SONiC
+    role: leaf
+    region: us-west-2
+    vlans:
+      - { id: 101, name: "management" }
+      - { id: 103, name: "production" }
+    interfaces:
+      - Ethernet0
+      - Ethernet4
+```
+
+All fields except `interfaces` are required. `region` and `interfaces` are optional.
+
+## Testing
+
+### Smoke Tests
+
+Run the smoke test script to verify basic functionality:
+
+```bash
+bash tests_smoke.sh
+```
+
+This script:
+1. Starts the MCP server
+2. Tests `inventory_summary` tool
+3. Tests `inventory_report` with export
+4. Verifies artifact files are created
+
+**Expected Output:**
+```
+=== Inventory Insight Agent Smoke Tests ===
+Starting MCP server...
+=== Test 1: inventory_summary ===
+✓ inventory_summary succeeded
+=== Test 2: inventory_report (export=md) ===
+✓ inventory_report succeeded
+  ✓ Report file exists: artifacts/inventory_report_YYYYMMDD_HHMMSS.md
+=== Test Summary ===
+✓ All smoke tests passed!
+```
+
 ## Running the Agent
 
 ### Start the MCP Server

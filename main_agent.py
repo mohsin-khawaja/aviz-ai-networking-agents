@@ -918,7 +918,7 @@ class CoordinatorResponseRenderer:
         output.append(f"Summary: {summary}")
         output.append("")
         
-        # Agents called
+        # Agents called``
         agents_called = result.get("agents_called", [])
         if agents_called:
             output.append(f"Agents invoked: {', '.join(agents_called)}")
@@ -1153,6 +1153,216 @@ class CoordinatorResponseRenderer:
         return "\n".join(output)
 
 
+def _parse_inventory_command(args: List[str]) -> Optional[Dict[str, Any]]:
+    """
+    Parse inventory CLI commands.
+    
+    Commands:
+        inventory list --by vendor --value Cisco --format table
+        inventory summary --format markdown
+        inventory mismatches --identity-check --format table
+        inventory report --export html
+    """
+    if not args or args[0] != "inventory":
+        return None
+    
+    if len(args) < 2:
+        return {"error": "Inventory command required: list, summary, mismatches, or report"}
+    
+    subcommand = args[1].lower()
+    
+    # Parse arguments
+    filter_by = None
+    filter_value = None
+    format_type = "table"
+    export_format = "none"
+    identity_check = False
+    
+    i = 2
+    while i < len(args):
+        if args[i] == "--by" and i + 1 < len(args):
+            filter_by = args[i + 1]
+            i += 2
+        elif args[i] == "--value" and i + 1 < len(args):
+            filter_value = args[i + 1]
+            i += 2
+        elif args[i] == "--format" and i + 1 < len(args):
+            format_type = args[i + 1]
+            i += 2
+        elif args[i] == "--export" and i + 1 < len(args):
+            export_format = args[i + 1]
+            i += 2
+        elif args[i] == "--identity-check":
+            identity_check = True
+            i += 1
+        else:
+            i += 1
+    
+    # Import inventory functions
+    from agents.inventory_agent import (
+        load_yaml_inventory, load_netbox_inventory, merge_inventories,
+        group_by, detect_mismatches, optional_identity_verify
+    )
+    from agents.inventory_models import InventoryReport
+    from utils.renderers import to_table, to_json, to_markdown_report, to_html_report
+    from pathlib import Path
+    
+    try:
+        yaml_snap = load_yaml_inventory()
+        netbox_snap = load_netbox_inventory()
+        merged = merge_inventories(yaml_snap, netbox_snap)
+        
+        if subcommand == "list":
+            devices = merged.devices
+            if filter_by and filter_value:
+                if filter_by == "vlan_id":
+                    vlan_id = int(filter_value)
+                    devices = [d for d in devices if any(v.id == vlan_id for v in d.vlans)]
+                else:
+                    devices = [d for d in devices if str(getattr(d, filter_by, "")).lower() == filter_value.lower()]
+            
+            if format_type == "json":
+                print(to_json([d.to_dict() for d in devices]))
+            elif format_type == "markdown":
+                report = InventoryReport(passed=len(devices), groups={})
+                print(to_markdown_report(merged, report, include_mismatches=False))
+            else:
+                print(to_table(devices))
+            return {"success": True}
+        
+        elif subcommand == "summary":
+            vendor_groups = group_by(merged, "vendor")
+            role_groups = group_by(merged, "role")
+            os_groups = group_by(merged, "os")
+            region_groups = group_by(merged, "region")
+            
+            totals = {
+                "total_devices": len(merged.devices),
+                "by_vendor": {k: len(v) for k, v in vendor_groups.items()},
+                "by_role": {k: len(v) for k, v in role_groups.items()},
+                "by_os": {k: len(v) for k, v in os_groups.items()},
+                "by_region": {k: len(v) for k, v in region_groups.items()}
+            }
+            
+            if format_type == "json":
+                print(to_json(totals))
+            elif format_type == "markdown":
+                lines = ["# Inventory Summary", "", f"**Total Devices:** {totals['total_devices']}", "", "## By Vendor", ""]
+                for vendor, count in totals["by_vendor"].items():
+                    lines.append(f"- {vendor}: {count}")
+                lines.extend(["", "## By Role", ""])
+                for role, count in totals["by_role"].items():
+                    lines.append(f"- {role}: {count}")
+                lines.extend(["", "## By OS", ""])
+                for os_type, count in totals["by_os"].items():
+                    lines.append(f"- {os_type}: {count}")
+                print("\n".join(lines))
+            else:
+                try:
+                    from tabulate import tabulate
+                    table_data = [["Category", "Value", "Count"]]
+                    table_data.append(["Total Devices", "", totals["total_devices"]])
+                    for vendor, count in totals["by_vendor"].items():
+                        table_data.append(["Vendor", vendor, count])
+                    for role, count in totals["by_role"].items():
+                        table_data.append(["Role", role, count])
+                    for os_type, count in totals["by_os"].items():
+                        table_data.append(["OS", os_type, count])
+                    print(tabulate(table_data, headers="firstrow", tablefmt="grid"))
+                except ImportError:
+                    print(f"Total Devices: {totals['total_devices']}")
+                    print("\nBy Vendor:")
+                    for vendor, count in totals["by_vendor"].items():
+                        print(f"  {vendor}: {count}")
+            return {"success": True}
+        
+        elif subcommand == "mismatches":
+            mismatches = detect_mismatches(yaml_snap, netbox_snap)
+            if identity_check:
+                identity_mismatches = optional_identity_verify(merged.devices, enabled=True)
+                mismatches.extend(identity_mismatches)
+            
+            if format_type == "json":
+                print(to_json([m.to_dict() for m in mismatches]))
+            elif format_type == "markdown":
+                lines = ["# Inventory Mismatches", "", f"**Total Mismatches:** {len(mismatches)}", "",
+                        "| Device | Category | Expected | Observed | Details |",
+                        "|--------|----------|----------|----------|---------|"]
+                for m in mismatches:
+                    details = m.details or ""
+                    lines.append(f"| {m.device_name} | {m.category} | {m.expected} | {m.observed} | {details} |")
+                print("\n".join(lines))
+            else:
+                try:
+                    from tabulate import tabulate
+                    table_data = [[m.device_name, m.category, str(m.expected), str(m.observed), (m.details or "")[:50]] 
+                                for m in mismatches]
+                    print(tabulate(table_data, headers=["Device", "Category", "Expected", "Observed", "Details"], tablefmt="grid"))
+                except ImportError:
+                    for m in mismatches:
+                        print(f"{m.device_name}: {m.category} - Expected {m.expected}, Got {m.observed}")
+            return {"success": True}
+        
+        elif subcommand == "report":
+            mismatches = detect_mismatches(yaml_snap, netbox_snap)
+            vendor_groups = group_by(merged, "vendor")
+            role_groups = group_by(merged, "role")
+            os_groups = group_by(merged, "os")
+            region_groups = group_by(merged, "region")
+            
+            report = InventoryReport(
+                passed=len(merged.devices) - len(mismatches),
+                failed=len(mismatches),
+                not_run=0,
+                mismatches=mismatches,
+                groups={
+                    "vendor": {k: len(v) for k, v in vendor_groups.items()},
+                    "role": {k: len(v) for k, v in role_groups.items()},
+                    "os": {k: len(v) for k, v in os_groups.items()},
+                    "region": {k: len(v) for k, v in region_groups.items()}
+                }
+            )
+            
+            if export_format != "none":
+                artifacts_dir = Path("artifacts")
+                artifacts_dir.mkdir(exist_ok=True)
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                
+                if export_format == "md":
+                    markdown = to_markdown_report(merged, report)
+                    file_path = artifacts_dir / f"inventory_report_{timestamp}.md"
+                    with open(file_path, 'w') as f:
+                        f.write(markdown)
+                    print(f"Report exported to: {file_path}")
+                elif export_format == "html":
+                    markdown = to_markdown_report(merged, report)
+                    html = to_html_report(markdown, title="Inventory Report")
+                    file_path = artifacts_dir / f"inventory_report_{timestamp}.html"
+                    with open(file_path, 'w') as f:
+                        f.write(html)
+                    print(f"Report exported to: {file_path}")
+                elif export_format == "json":
+                    report_data = {"snapshot": merged.to_dict(), "report": report.to_dict()}
+                    file_path = artifacts_dir / f"inventory_report_{timestamp}.json"
+                    with open(file_path, 'w') as f:
+                        f.write(to_json(report_data))
+                    print(f"Report exported to: {file_path}")
+            else:
+                # Print summary
+                print(f"Inventory Report Summary:")
+                print(f"  Total Devices: {len(merged.devices)}")
+                print(f"  Mismatches: {len(mismatches)}")
+                print(f"  Passed: {report.passed}")
+                print(f"  Failed: {report.failed}")
+            return {"success": True}
+        
+        else:
+            return {"error": f"Unknown inventory command: {subcommand}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def main():
     """
     Main entry point for the interactive multi-agent coordinator system.
@@ -1162,10 +1372,28 @@ def main():
     
     Usage:
         python main_agent.py
+        
+    CLI Commands:
+        inventory list --by vendor --value Cisco --format table
+        inventory summary --format markdown
+        inventory mismatches --identity-check --format table
+        inventory report --export html
     
     Environment Variables:
         OPENAI_API_KEY: OpenAI API key for LLM-based query parsing (optional)
     """
+    import sys
+    
+    # Check for CLI arguments
+    if len(sys.argv) > 1:
+        # Parse CLI command
+        result = _parse_inventory_command(sys.argv[1:])
+        if result:
+            if "error" in result:
+                print(f"Error: {result['error']}", file=sys.stderr)
+                sys.exit(1)
+            sys.exit(0)
+    
     print("Aviz AI Agent (Multi-Agent Coordinator) ready. Ask me about your network.")
     print()
     
@@ -1191,6 +1419,13 @@ def main():
                 print("Goodbye!")
                 break
             
+            # Check for CLI-style inventory commands
+            if query.startswith("inventory "):
+                result = _parse_inventory_command(query.split())
+                if result and "error" in result:
+                    print(f"Error: {result['error']}")
+                continue
+            
             if query.lower() == "help":
                 print("\nAvailable commands:")
                 print("  - Ask questions about network devices, telemetry, configuration, tickets")
@@ -1205,6 +1440,11 @@ def main():
                 print("    'Show me all devices with high CPU usage and open ServiceNow tickets'")
                 print("  - Type 'quit' or 'exit' to exit")
                 print("  - Type 'clear' to clear conversation context")
+                print("\nInventory CLI Commands:")
+                print("  inventory list --by vendor --value Cisco --format table")
+                print("  inventory summary --format markdown")
+                print("  inventory mismatches --identity-check --format table")
+                print("  inventory report --export html")
                 print("\nAvailable Agents:")
                 print("  - Inventory: Device inventory, VLANs, device information")
                 print("  - Telemetry: Interface status, errors, utilization, CPU/memory")

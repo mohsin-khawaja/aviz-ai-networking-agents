@@ -61,7 +61,9 @@ class CoordinatorAgent:
         inventory_keywords = [
             "vlan", "device", "inventory", "which device", "list devices",
             "device info", "show device", "device name", "sonic", "nexus",
-            "edgecore", "celtica", "nvidia", "role", "vendor", "os"
+            "edgecore", "celtica", "nvidia", "role", "vendor", "os",
+            "mismatch", "netbox", "yam", "group devices", "inventory summary",
+            "inventory report", "generate report", "sonic leaf", "sonic switch"
         ]
         
         # Telemetry-related keywords

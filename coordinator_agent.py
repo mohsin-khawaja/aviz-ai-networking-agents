@@ -38,7 +38,6 @@ def main():
                     continue
                 if query.lower() in ["quit", "exit", "q"]:
                     break
-                
                 result = coordinator.execute_query(query)
                 print("\nSummary:", result.get("summary", "N/A"))
                 print("Agents called:", ", ".join(result.get("agents_called", [])))

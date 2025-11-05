@@ -4,43 +4,70 @@ devices:
     vendor: EdgeCore
     os: SONiC
     role: leaf
+    region: us-west-2
     vlans:
       - { id: 101, name: "management" }
       - { id: 103, name: "production" }
+    interfaces:
+      - Ethernet0
+      - Ethernet4
+      - Ethernet8
+      - Ethernet12
   
   - name: nexus-agg-02
     ip: 10.20.11.14
     vendor: Cisco
     os: NX-OS
     role: aggregation
+    region: us-west-2
     vlans:
       - { id: 120, name: "core" }
       - { id: 103, name: "production" }
+    interfaces:
+      - Ethernet1/1
+      - Ethernet1/2
+      - Ethernet1/3
+      - Ethernet1/4
   
   - name: sonic-spine-01
     ip: 10.20.11.50
     vendor: Arista
     os: SONiC
     role: spine
+    region: us-west-2
     vlans:
       - { id: 101, name: "management" }
       - { id: 120, name: "core" }
+    interfaces:
+      - Ethernet1
+      - Ethernet2
+      - Ethernet3
+      - Ethernet4
   
   - name: edgecore-switch-03
     ip: 10.20.11.88
     vendor: EdgeCore
     os: SONiC
     role: leaf
+    region: us-east-1
     vlans:
       - { id: 103, name: "production" }
       - { id: 104, name: "development" }
+    interfaces:
+      - Ethernet0
+      - Ethernet4
+      - Ethernet8
   
   - name: celtica-ds4000-01
     ip: 10.20.11.100
     vendor: Celtica
     os: Custom
     role: core
+    region: us-east-1
     vlans:
       - { id: 120, name: "core" }
       - { id: 101, name: "management" }
+    interfaces:
+      - GigabitEthernet0/1
+      - GigabitEthernet0/2
 
